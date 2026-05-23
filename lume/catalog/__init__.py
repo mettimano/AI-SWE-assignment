@@ -1,0 +1,1 @@
+"""Catalog loading and normalization."""

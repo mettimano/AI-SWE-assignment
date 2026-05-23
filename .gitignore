@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# uv
+.uv/
+
+# Secrets
+.env
+.env.local
+
+# Local data artifacts
+.chroma/
+data/cache/
+data/users/*.json
+!data/users/_seed_*.json
+!data/users/.gitkeep
+
+# Eval outputs
+eval/runs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

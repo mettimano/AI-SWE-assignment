@@ -1,0 +1,18 @@
+{
+  "user_id": "giulia",
+  "language": "it",
+  "known_preferences": {
+    "fragrance_families": ["floreale", "muschiato"],
+    "brands_liked": ["Diptyque", "Maison Margiela"],
+    "brands_disliked": [],
+    "budget_max": 80.0,
+    "niche_lean": true,
+    "gender_lean": "donna",
+    "must_avoid": ["oud", "cuoio"]
+  },
+  "past_purchases": ["p_006", "p_073"],
+  "past_recommendations_accepted": ["p_010"],
+  "past_recommendations_rejected": [],
+  "notes": "Cliente abituale, preferisce profumi freschi e floreali. Acquisti precedenti: Diptyque L'Eau Papier e Patchouli Premier.",
+  "updated_at": "2026-03-10T14:22:00+00:00"
+}

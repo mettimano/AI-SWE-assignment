@@ -363,8 +363,8 @@ def node_answer(state: ConversationState) -> dict:
         selected: NormalizedProduct | None = state.get("selected_product")
         if selected:
             responder_message = (
-                f"Trovami profumi simili a {selected.title}, "
-                "stesso stile e caratteristiche."
+                f"Trovami prodotti simili a {selected.title}, "
+                "stesse caratteristiche e stile."
             )
         else:
             responder_message = state.get("retrieval_query") or state["message"]

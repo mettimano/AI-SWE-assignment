@@ -79,11 +79,16 @@ _MODE_STYLE: dict[str, str] = {
 }
 
 
-def _display_reply(reply: Reply, debug: bool = False) -> None:
+def _display_reply(reply: Reply, verbose: bool = False, debug: bool = False) -> None:
+    if not verbose:
+        # Clean default: just the message text, like a real WhatsApp conversation
+        console.print(f"[bold green]Lumé:[/bold green] {reply.reply_text}")
+        return
+
+    # ── Verbose mode: full display ──────────────────────────────────────────────
     mode_style = _MODE_STYLE.get(reply.mode, "bold white")
     mode_label = Text(f" {reply.mode} ", style=f"on {mode_style.split()[1]}")
 
-    # Main reply panel
     console.print(
         Panel(
             reply.reply_text,
@@ -139,7 +144,7 @@ def _display_reply(reply: Reply, debug: bool = False) -> None:
     if reply.debug.get("guard_fallback"):
         console.print("  [dim red]⚠ guard fallback applied[/dim red]")
 
-    # Debug info
+    # Debug info (only with --debug on top of --verbose)
     if debug:
         latency = reply.debug.get("latency_ms", "?")
         console.print(f"  [dim]mode={reply.mode}  latency={latency}ms[/dim]")
@@ -152,7 +157,7 @@ def _display_reply(reply: Reply, debug: bool = False) -> None:
 
 # ── Commands ──────────────────────────────────────────────────────────────────
 
-def _run_one(message: str, session: _Session, debug: bool) -> None:
+def _run_one(message: str, session: _Session, verbose: bool, debug: bool) -> None:
     with console.status("[dim]Elaboro...[/dim]", spinner="dots"):
         state = run_turn(message, **session.as_kwargs())
     session.update_from(state)
@@ -160,7 +165,7 @@ def _run_one(message: str, session: _Session, debug: bool) -> None:
     if reply is None:
         console.print("[red]Nessuna risposta generata (errore interno).[/red]")
         return
-    _display_reply(reply, debug=debug)
+    _display_reply(reply, verbose=verbose, debug=debug)
 
 
 @app.command()
@@ -169,7 +174,8 @@ def main(
     repl: bool = typer.Option(False, "--repl", "-r", help="Modalità REPL multi-turn"),
     user: str = typer.Option(None, "--user", "-u", help="User ID per memoria persistente"),
     build_index: bool = typer.Option(False, "--build-index", help="Costruisce indici Chroma e BM25"),
-    debug: bool = typer.Option(False, "--debug", "-d", help="Mostra info debug (intent, latency)"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Mostra mode badge, tabella prodotti e probe"),
+    debug: bool = typer.Option(False, "--debug", "-d", help="Mostra info debug intent e latency (richiede --verbose)"),
 ) -> None:
     """Lumé — assistente WhatsApp per beauty e profumeria."""
 
@@ -180,9 +186,9 @@ def main(
     session = _Session(user_id=user)
 
     if repl or query is None:
-        _cmd_repl(session, debug=debug)
+        _cmd_repl(session, verbose=verbose, debug=debug)
     else:
-        _run_one(query, session, debug=debug)
+        _run_one(query, session, verbose=verbose, debug=debug)
 
 
 def _cmd_build_index() -> None:
@@ -211,16 +217,34 @@ def _cmd_build_index() -> None:
     console.print("[bold green]Indici pronti.[/bold green]")
 
 
-def _cmd_repl(session: _Session, debug: bool) -> None:
+def _cmd_repl(session: _Session, verbose: bool, debug: bool) -> None:
     user_label = f"[cyan]{session.user_id}[/cyan]" if session.user_id else "[dim]anonimo[/dim]"
+    flags = "--verbose" + (" --debug" if debug else "") if verbose else ""
+
+    if session.user_id:
+        welcome = (
+            f"Ciao [bold]{session.user_id}[/bold], bentornato da Lumé! "
+            "Cosa posso fare per te oggi?"
+        )
+    else:
+        welcome = (
+            "Ciao! Benvenuto da [bold]Lumé[/bold] ✨\n"
+            "Sono qui per aiutarti a trovare il profumo o il prodotto beauty perfetto. "
+            "Dimmi pure cosa cerchi!"
+        )
+
     console.print(
         Panel(
-            f"Lumé WhatsApp Assistant  •  utente: {user_label}\n"
-            "[dim]Scrivi il tuo messaggio. Comandi: /quit  /reset  /debug[/dim]",
-            border_style="blue",
+            welcome,
+            border_style="green",
             padding=(0, 1),
         )
     )
+    console.print(
+        f"[dim]utente: {user_label}  •  comandi: /quit  /reset  /verbose  /debug"
+        + (f"  •  {flags}" if flags else "") + "[/dim]"
+    )
+    console.print()
 
     while True:
         try:
@@ -241,12 +265,17 @@ def _cmd_repl(session: _Session, debug: bool) -> None:
             console.print("[dim]Sessione resettata.[/dim]")
             continue
 
+        if raw.lower() == "/verbose":
+            verbose = not verbose
+            console.print(f"[dim]Verbose {'on' if verbose else 'off'}.[/dim]")
+            continue
+
         if raw.lower() == "/debug":
             debug = not debug
             console.print(f"[dim]Debug {'on' if debug else 'off'}.[/dim]")
             continue
 
-        _run_one(raw, session, debug=debug)
+        _run_one(raw, session, verbose=verbose, debug=debug)
         console.print()
 
 

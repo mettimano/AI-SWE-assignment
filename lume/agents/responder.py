@@ -176,20 +176,19 @@ _FEW_SHOT: list[dict] = [
             'Qual è il registro che senti più tuo?", "cited": []}'
         ),
     },
-    # clarify_question
+    # clarify_question — no framing provided, responder writes naturally
     {
         "role": "user",
         "content": (
             "MODALITÀ: clarify_question\n"
             "MESSAGGIO: vorrei regalare un profumo\n"
-            "FRAMING: Certo! Per aiutarti al meglio ho bisogno di qualche info in più 😊\n"
             "DOMANDE DA INCORPORARE: Hai un budget in mente? È per uomo o donna?\n"
         ),
     },
     {
         "role": "assistant",
         "content": (
-            '{"reply_text": "Certo! Hai un budget in mente, e lo cerchi per uomo o donna? 😊", "cited": []}'
+            '{"reply_text": "Hai un budget in mente, e lo cerchi per uomo o donna?", "cited": []}'
         ),
     },
     # escalate

@@ -97,10 +97,16 @@ gender_lean: "uomo"/"donna"/"unisex" se esplicito o fortemente implicito.
 must_avoid: cumulativo. "no oud" + ["cuoio"] già presenti → ["cuoio","oud"].
 tester_requested: true se l'utente menziona "tester", "campione aperto", "confezione aperta", "sample" o simili.
 escalate: true per reso/rimborso/ordine/B2B/frustrazione forte.
-missing_critical_fields: ["budget_max"] se categories=["profumo"] e budget_max mancante.
-  Aggiungi "gender_lean" se categories=["profumo"] e gender_lean mancante.
-  Aggiungi "budget_max" se gift_recipient != null e budget_max mancante.
-  (Dopo 2 clarify_question questi campi vengono ignorati dal sistema — non è un errore.)
+missing_critical_fields: lista i campi critici assenti. Regole:
+  FRAGRANZA: se categories contiene qualsiasi variante di profumo/fragranza
+    (profumo, profumi, fragranza, eau-de-parfum, edp, edt, colonia, …):
+    - se budget_max è None → aggiungi "budget_max"
+    - se gender_lean è None → aggiungi "gender_lean"
+  REGALO: se gift_recipient != null (indipendentemente dalla categoria):
+    - se budget_max è None → aggiungi "budget_max"
+    - se gender_lean è None → aggiungi "gender_lean"
+  CATEGORIA ASSENTE: se non riesci a inferire nessuna categoria → aggiungi "categories".
+  (Dopo 2 clarify_question il sistema ignora questi campi — non è un errore.)
 bm25_weight / vector_weight:
   Brand o prodotto specifico menzionato → bm25_weight=2.0, vector_weight=1.0
   Solo umore/occasione/sensazione → bm25_weight=1.0, vector_weight=2.0

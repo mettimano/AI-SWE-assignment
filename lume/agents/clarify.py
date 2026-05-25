@@ -32,7 +32,9 @@ class ClarifyPayload(BaseModel):
 # ── Decision rule ─────────────────────────────────────────────────────────────
 
 # Hard-filter fields whose absence forces an explicit question.
-_CRITICAL_FIELDS = {"budget_max", "categories"}
+# gender_lean is critical for fragrance: recommending a feminine floral to a man
+# without asking is worse than asking one extra question.
+_CRITICAL_FIELDS = {"budget_max", "categories", "gender_lean"}
 
 
 def _needs_question(intent: Intent) -> bool:
@@ -40,21 +42,49 @@ def _needs_question(intent: Intent) -> bool:
 
 
 def _needs_probe(intent: Intent) -> bool:
-    """True when hard filters are known but soft axes (family/occasion) are still open."""
-    return (
-        not _needs_question(intent)
-        and intent.confidence < CONFIG.clarify.soft_ambiguity_threshold
-        and bool(intent.categories)
-    )
+    """True when hard filters are known but soft axes (family/occasion) are still open.
+
+    Two triggers:
+    1. Low confidence — the standard ambiguity case (family/mood unknown).
+    2. Gift with unknown style — even when confidence is high, a gift recipient's
+       taste is unknown: probing with 2-4 style-spanning options is safer than
+       guessing and landing on the wrong fragrance family.
+    """
+    if _needs_question(intent) or not intent.categories:
+        return False
+
+    if intent.confidence < CONFIG.clarify.soft_ambiguity_threshold:
+        return True
+
+    # Gift whose recipient's style is completely open → probe even if hard filters satisfied
+    if intent.gift_recipient and not intent.fragrance_family:
+        return True
+
+    return False
 
 
 # ── Question writer ────────────────────────────────────────────────────────────
 
 _QUESTION_SYSTEM = """\
 Sei un assistente WhatsApp per Lumé, un rivenditore beauty italiano.
-Il cliente ha fatto una richiesta vaga. Scrivi uan domanda breve, naturale e professionale nella lingua in cui l'utente ti scrive
-per capire meglio cosa cerca. Tono caldo, colloquiale, senza elenchi puntati.
-Rispondi con un JSON { "questions": ["domanda 1"] }.
+Il cliente ha fatto una richiesta vaga. Scrivi UNA SOLA domanda breve e naturale che copra
+TUTTI i campi mancanti indicati — incorporali in un'unica frase, MAI come elenco puntato.
+Lingua: scrivi nella stessa lingua del cliente.
+Tono: caldo, diretto, come un consulente vero — non un form di registrazione.
+
+Esempi:
+  mancano budget_max + gender_lean →
+    "Hai un budget in mente, e lo cerchi per uomo o donna?"
+  mancano budget_max + gender_lean (regalo) →
+    "Sai già quanto spendere? E il profumo è per lui o per lei?"
+  mancano budget_max + gender_lean + info destinatario →
+    "Hai un budget in mente? E cosa sai di chi lo riceverà — è per uomo o donna, e ha gusti particolari?"
+  manca solo budget_max →
+    "Hai un'idea di budget?"
+  manca solo gender_lean →
+    "Lo cerchi per uomo o donna?"
+
+Rispondi con un JSON { "questions": ["domanda unica"] }.
 """
 
 
@@ -80,11 +110,16 @@ def _generate_questions(
             "\nStorico conversazione (NON ripetere domande già poste):\n"
             + "\n".join(lines)
         )
+    gift_note = (
+        f"\nContesto: è un regalo per {intent.gift_recipient}."
+        if intent.gift_recipient
+        else ""
+    )
     prompt = (
-        f"Categoria richiesta: {intent.categories or 'non specificata'}.\n"
+        f"Categoria richiesta: {intent.categories or 'non specificata'}.{gift_note}\n"
         f"Campi mancanti: {missing}."
         f"{history_note}\n"
-        f"Scrivi le domande necessarie.{lang_note}"
+        f"Scrivi UNA domanda che copra tutti i campi mancanti in modo naturale.{lang_note}"
     )
     client = OpenAI(api_key=require_openai_key())
     response = client.beta.chat.completions.parse(
@@ -185,15 +220,11 @@ def build_clarify_payload(
     """
     if _needs_question(intent):
         questions = _generate_questions(intent, intent.language, topic_history)
-        framing = (
-            "Certo! Per aiutarti al meglio ho bisogno di qualche info in più 😊"
-            if intent.language == "it"
-            else "Of course! Just a couple of quick questions to help you better 😊"
-        )
+        # No hardcoded framing — the responder generates a natural opening from
+        # the questions alone. A fixed "Certo! Per aiutarti..." sounds scripted.
         return ClarifyPayload(
             mode="clarify_question",
             questions=questions,
-            framing=framing,
         )
 
     if _needs_probe(intent):

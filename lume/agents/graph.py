@@ -110,6 +110,14 @@ def _enforce_constraints(state: ConversationState, decision: RouterDecision) -> 
     if action == "escalate":
         return "escalate"
 
+    # chat always allowed — doesn't touch state, just answers
+    if action == "chat":
+        return "chat"
+
+    # compare always allowed — uses last_shown if present, retrieves otherwise
+    if action == "compare":
+        return "compare"
+
     # extract_intent: blocked if just ran (can't call twice in a row)
     if action == "extract_intent" and last_action == "extract_intent":
         if clarify_count <2:
@@ -513,6 +521,93 @@ def node_escalate(state: ConversationState) -> dict:
     return {"reply": reply, "last_action": "escalate", "topic_history": updated_history}
 
 
+def node_chat(state: ConversationState) -> dict:
+    """Off-topic / greeting / meta — polite reply, no retrieval, no state mutation."""
+    from lume.agents.responder import generate_response  # noqa: PLC0415
+
+    intent: Intent = state.get("current_intent") or Intent()
+    t_start = state.get("_t_start", time.perf_counter())
+    topic_history = state.get("topic_history") or []
+    reply = generate_response(
+        message=state["message"],
+        mode="chat",
+        intent=intent,
+        candidates=[],
+        oos_fallback=[],
+        user_profile=state.get("user_profile"),
+        topic_history=topic_history,
+    )
+    reply.debug["latency_ms"] = int((time.perf_counter() - t_start) * 1000)
+    reply.user_id = state.get("user_id")
+    updated_history = topic_history + [{"role": "assistant", "content": reply.reply_text}]
+    # Note: deliberately does NOT touch current_intent / last_shown — the user can pick up
+    # the previous search after a chat detour.
+    return {"reply": reply, "last_action": "chat", "topic_history": updated_history}
+
+
+def node_compare(state: ConversationState) -> dict:
+    """Compare / explain specific products.
+
+    Uses last_shown_products when the question is about them. If the user mentions
+    products NOT in context (e.g. "differenza tra Chanel Coco e Dior Sauvage"), runs
+    a targeted retrieval to find them by name and then explains. Never proposes
+    alternatives the user didn't ask about.
+    """
+    from lume.agents.responder import generate_response  # noqa: PLC0415
+
+    intent: Intent = state.get("current_intent") or Intent()
+    t_start = state.get("_t_start", time.perf_counter())
+    topic_history = state.get("topic_history") or []
+    candidates: list[NormalizedProduct] = state.get("last_shown_products") or []
+
+    # If nothing is in context, do a targeted retrieval based on the user's message —
+    # the message itself contains the product names ("differenza tra X e Y").
+    if not candidates:
+        from lume.retrieval.query import generate_retrieval_query  # noqa: PLC0415
+        catalog, bm25 = _ensure_resources()
+        id_map = {p.product_id: p for p in catalog}
+        query = generate_retrieval_query(topic_history, intent) or state["message"]
+        bm25_results = bm25.query(query, top_k=20)
+        vector_results = query_vector(query, top_k=20)
+        fused_ids = hybrid_search(
+            bm25_results,
+            vector_results,
+            bm25_weight=intent.bm25_weight,
+            vector_weight=intent.vector_weight,
+            top_n=8,
+        )
+        candidates = [id_map[pid] for pid in fused_ids if pid in id_map][:4]
+
+    reply = generate_response(
+        message=state["message"],
+        mode="compare",
+        intent=intent,
+        candidates=candidates,
+        oos_fallback=[],
+        user_profile=state.get("user_profile"),
+        topic_history=topic_history,
+    )
+    reply.debug["latency_ms"] = int((time.perf_counter() - t_start) * 1000)
+    reply.user_id = state.get("user_id")
+
+    # Update last_shown only when compare did its own retrieval (so a follow-up
+    # "il primo" can resolve). If we used existing context, leave it untouched.
+    shown_ids = [r.product_id for r in reply.recommendations]
+    updated_history = topic_history + [{"role": "assistant", "content": reply.reply_text}]
+    out: dict = {
+        "reply": reply,
+        "last_action": "compare",
+        "topic_history": updated_history,
+    }
+    if not (state.get("last_shown_products") or []) and shown_ids:
+        catalog, _ = _ensure_resources()
+        id_map = {p.product_id: p for p in catalog}
+        out["last_shown_product_ids"] = shown_ids
+        out["last_shown_products"] = [id_map[pid] for pid in shown_ids if pid in id_map]
+        out["last_shown_mode"] = "compare"
+    return out
+
+
 def node_guard(state: ConversationState) -> dict:
     from lume.agents.guard import check  # noqa: PLC0415
 
@@ -607,6 +702,8 @@ def build_graph():
     g.add_node("selection", node_selection)
     g.add_node("save_preferences", node_save_preferences)
     g.add_node("escalate", node_escalate)
+    g.add_node("chat", node_chat)
+    g.add_node("compare", node_compare)
     g.add_node("guard", node_guard)
 
     # Entry
@@ -625,6 +722,8 @@ def build_graph():
             "selection": "selection",
             "new_topic": "new_topic",
             "escalate": "escalate",
+            "chat": "chat",
+            "compare": "compare",
         },
     )
 
@@ -661,6 +760,8 @@ def build_graph():
     g.add_edge("answer", "guard")
     g.add_edge("clarify", "guard")
     g.add_edge("escalate", "guard")
+    g.add_edge("chat", "guard")
+    g.add_edge("compare", "guard")
     g.add_edge("guard", END)
 
     return g.compile()

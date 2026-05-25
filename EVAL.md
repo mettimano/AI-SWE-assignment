@@ -62,12 +62,15 @@ Ogni nodo del grafo è valutabile isolatamente perché ha I/O strutturato.
 **Responder.** Il messaggio rispetta brand voice e WhatsApp style?
 - **LLM judge** su 3 assi, 1–5: `relevance`, `brand_voice`, `whatsapp_feel`. Soglia target: media ≥ 4.0 per asse.
 - **Hallucination rate**: product ID citati che non sono in catalogo. Soglia: 0%.
-- **OOS-in-opening rate**: primo prodotto citato esaurito. Soglia: 0%.
-- **Sentence count compliance** per modalità (configurato in `GuardrailConfig`).
+- **OOS-in-opening rate**: primo prodotto citato esaurito (modalità `answer`). Soglia: 0%.
+- **Sentence count compliance** per modalità (configurato in `GuardrailConfig` — ora copre `answer`, `clarify_*`, `escalate`, `no_match`, `chat`, `compare`).
 - **Emoji count compliance** (max 1).
 - **Markdown leak rate**: `**`, `-`, `#` nell'output. Soglia: 0%.
 - **Language match**: lingua della reply == lingua del messaggio cliente.
 - **Medical claim rate**: 0%.
+- **Mode-specific compliance**:
+  - `chat`: nessun product ID citato, nessuna spinta forzata a comprare, breve (1–2 frasi).
+  - `compare`: solo i prodotti chiesti dal cliente (no alternative nuove), `recommendations` ⊆ {prodotti nominati o in `last_shown`}.
 
 **Memory.** Le preferenze persistite influenzano le raccomandazioni successive?
 - **Pref usage rate**: con un profilo seeded floral-niche-budget-80, una query muta ("vorrei provare qualcosa di nuovo") produce raccomandazioni che riflettono le prefs in ≥ 80% dei casi.
@@ -107,9 +110,12 @@ Casi che la valutazione single-turn non cattura:
 
 **Cosa aggiungerei:**
 - **30+ retrieval-only cases** con gold set (separati dai casi end-to-end).
-- **20+ casi adversarial** dai log reali: typo, code-switching it↔en, frasi a metà, prompt injection, domande non-shopping ("come stai?"), claim impliciti ("è ipoallergenico?").
+- **20+ casi adversarial** dai log reali: typo, code-switching it↔en, frasi a metà, prompt injection, claim impliciti ("è ipoallergenico?").
+- **10+ casi `chat`**: saluti, domande off-topic ("come si risolve un'equazione differenziale?", "come stai?"), meta-domande ("chi sei?", "cosa puoi fare?"). Devono ritornare mode=`chat`, non `escalate`, e non toccare lo stato della conversazione.
+- **10+ casi `compare`**: comparazione di prodotti in contesto ("differenza tra il primo e il secondo"), comparazione di prodotti non in contesto ("differenza tra Chanel Coco e Dior Sauvage" — testa il retrieval mirato), spiegazioni a richiesta. Devono ritornare mode=`compare` senza proporre alternative.
+- **10+ casi di price anchoring**: "simile a X con prezzo simile", "leggermente più caro", "luxury upgrade" — il `budget_max` deve essere derivato dal prezzo del prodotto in `last_shown`.
 - **10+ casi di multi-turn lunghi** (5+ turni con cambi di topic, refinement multipli, selezioni).
-- **Casi di OOD** (out of distribution): richieste per categorie non in catalogo (es. "vorrei un trucco per il viso"), nomi di brand inesistenti.
+- **Casi di OOD** (out of distribution): richieste per categorie non in catalogo, nomi di brand inesistenti.
 
 Il principio: **un test set ben fatto è 70% del lavoro di eval**. La maggior parte dei progetti AI fallisce perché ha un test set che coincide con i casi "facili" su cui il sistema è stato debuggato.
 
@@ -175,7 +181,9 @@ L'ordine in cui chiuderei questi gap, dato il vincolo di tempo:
 
 ## Risultati attuali
 
-L'ultima eval baseline (18 casi, judge attivo):
+Il sistema è stato testato con due configurazioni di modelli (la scelta resta una decisione operativa via env vars):
+
+**Baseline iniziale — `gpt-4o` responder + `gpt-4o-mini` per tutto il resto:**
 
 | Metrica | Valore |
 |---|---|
@@ -186,4 +194,20 @@ L'ultima eval baseline (18 casi, judge attivo):
 | Judge brand_voice | 3.95 / 5 |
 | Judge whatsapp_feel | 4.0 / 5 |
 
-Il pass rate al 100% sui check deterministici non significa "il sistema è perfetto" — significa che il test set è dominato da casi canonici. Le metriche judge intorno a 4.0 sono un segnale debolmente positivo che diventerà un segnale affidabile solo dopo la calibrazione kappa.
+**Run più recente — `gpt-5.4` responder + `gpt-5.4-mini` per tutto il resto:**
+
+| Metrica | Valore |
+|---|---|
+| Casi passati | 17/18 |
+| Check pass rate | 99.0% |
+| Latenza media | ~14s (include overhead judge) |
+| Judge relevance | 3.9 / 5 |
+| Judge brand_voice | 3.85 / 5 |
+| Judge whatsapp_feel | 3.85 / 5 |
+
+L'unica regressione sulla run gpt-5.4 è C12 ("Christmas gift for woman") che è finita in `clarify_question` invece di `answer`: il modello più recente è più rigoroso sulla policy "i regali probano se lo stile è sconosciuto" e ha chiesto un'informazione in più. Comportamentalmente difendibile, ma il test case si aspettava `answer` — è un caso in cui il test set è da aggiornare, non il sistema.
+
+**Letture chiave:**
+- Le metriche judge sui due modelli sono effettivamente sovrapponibili a questa scala (delta < 0.15). La differenza qualitativa percepita a occhio è maggiore di quella che il judge cattura — sintomo che il judge è poco discriminante e va calibrato (vedi sezione precedente).
+- Il pass rate al 100% / 99% sui check deterministici non significa "il sistema è perfetto" — significa che il test set è dominato da casi canonici. Servono adversarial per una stima onesta.
+- Le metriche judge intorno a 4.0 sono un segnale debolmente positivo che diventerà affidabile solo dopo la calibrazione kappa.

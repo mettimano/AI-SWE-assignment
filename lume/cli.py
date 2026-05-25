@@ -76,6 +76,8 @@ _MODE_STYLE: dict[str, str] = {
     "escalate": "bold red",
     "no_match": "bold magenta",
     "specification": "bold blue",
+    "chat": "bold white",
+    "compare": "bold blue",
 }
 
 

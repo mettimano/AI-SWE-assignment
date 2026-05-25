@@ -119,6 +119,19 @@ confidence: 1.0 se intent completo. 0.5-0.7 se assi morbidi aperti. 0.3-0.5 se c
 "qualcosa per l'estate" → occasion="estate", fragrance_family=["agrumato","acquatico"]
 "di nicchia" → niche_preference=true
 "senza oud" / "no oud" → must_avoid aggiungi "oud"
+
+─── Price anchoring (SOLO in refine_intent con last_shown disponibile) ──────────
+Quando l'utente chiede prodotti "simili a X" e ANCORA il prezzo a quel prodotto
+("prezzo simile", "stessa fascia", "anche un po' più caro", "leggermente più alto"),
+DEVI:
+  • Leggere il prezzo del prodotto referenziato da "Prodotti mostrati nell'ultimo turno".
+  • Impostare budget_max in base a quel prezzo:
+      - "prezzo simile" / "stessa fascia"        → budget_max ≈ prezzo × 1.10
+      - "anche un po' più caro" / "leggermente"  → budget_max ≈ prezzo × 1.25
+      - "molto più caro" / "luxury upgrade"      → budget_max ≈ prezzo × 1.60
+Esempio: l'utente ha appena visto Atyab Violet a €65 e dice "qualcosa di simile,
+prezzo simile" → budget_max = 72.
+Se non c'è nessun aggancio di prezzo nel messaggio, NON toccare budget_max.
 """
 
 

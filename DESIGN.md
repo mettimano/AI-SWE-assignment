@@ -25,15 +25,19 @@ In pratica:
 - Il responder LLM scrive il testo del messaggio. Il guard gira dopo, in modo deterministico, sulla stringa di output. Product ID inventati, marker markdown, OOS in apertura, eccesso di emoji, claim medici — tutto intercettato prima che la risposta esca dal sistema.
 - La persistenza in memoria gira come nodo automatico dopo una selezione, non come qualcosa che il router può decidere di saltare.
 
-Il grafo termina in cinque modalità di output:
+Il grafo termina in sette modalità di output:
 
 | Modalità | Trigger | Forma |
 |---|---|---|
 | `answer` | intent confidente + ≥1 prodotto disponibile | 2–4 frasi che citano 2–4 prodotti |
 | `clarify_question` | manca un hard filter | 1 messaggio, ≤2 domande, nessun prodotto |
 | `clarify_probe` | hard filter noti, assi soft aperti | framing + 2–4 prodotti che coprono stili diversi |
+| `compare` | l'utente vuole confrontare prodotti specifici | 2–4 frasi che mettono a confronto, nessuna alternativa nuova |
+| `chat` | messaggio off-topic, saluto, meta-domanda | 1–2 frasi, redirect cortese, nessun retrieval |
 | `escalate` | resi / rimborsi / B2B / frustrazione | frase empatica + `needs_human=True` |
 | `no_match` | zero candidati dopo i filtri hard | scuse + alternativa OOS più vicina |
+
+Le due modalità "non-shopping" — `chat` e `compare` — sono state aggiunte dopo aver osservato che il sistema escalava domande off-topic ("come si risolve un'equazione differenziale?") e non sapeva gestire domande di comparazione ("che differenza c'è tra il primo e il secondo?"). `chat` risponde cortesemente senza toccare lo stato della conversazione, così l'utente può riprendere la ricerca subito dopo. `compare` usa i prodotti già in `last_shown_products` quando sono pertinenti, altrimenti fa un retrieval mirato per recuperarli — ma non propone mai alternative nuove che l'utente non ha chiesto.
 
 Un agente a singolo prompt potrebbe fare la maggior parte di questo, ma gli invarianti imposti via prompt falliscono in produzione circa il 5% delle volte. A scala conversazionale è una violazione ogni venti turni. Il costo strutturale del grafo è più codice; il costo a runtime è praticamente zero.
 
@@ -83,6 +87,8 @@ L'apertura di una domanda di chiarificazione la genera il responder, non un temp
 Includere i turni assistant è ciò che fa funzionare i riferimenti ordinali. Quando il bot ha appena elencato tre profumi per nome e il cliente risponde "il secondo", l'LLM di refinement ha bisogno di vedere cosa ha detto il bot, non solo cosa ha detto il cliente. Il costo è un prompt doppio; il costo per turno è dominato dal responder, quindi l'impatto è trascurabile.
 
 L'intent viene aggiornato per diff e non per ri-estrazione completa: `refine_intent` ritorna solo i campi che il cliente ha toccato, mergiati in modo additivo su `current_intent`. Dire "più economico" abbassa il budget; non cancella la famiglia olfattiva stabilita in precedenza.
+
+`refine_intent` riceve anche i prezzi dei prodotti in `last_shown` e li usa per il **price anchoring**: quando l'utente dice "qualcosa di simile a X con prezzo simile" o "leggermente più caro", l'agente legge il prezzo del prodotto referenziato e imposta `budget_max` in base a quello (×1.10 per "prezzo simile", ×1.25 per "leggermente più alto", ×1.60 per "luxury upgrade"). Senza questa regola il cliente dovrebbe ripetere il budget ad ogni raffinamento, perdendo il contesto.
 
 ---
 
@@ -138,11 +144,21 @@ Il merge è additivo, mai distruttivo. "No oud" appende a `must_avoid`; rimuover
 
 ## Costi e latenza
 
-Turno answer mediano: ~$0.012. Clarify: ~$0.001. Escalation: ~$0.0005.
+Il sistema è stato testato con due famiglie di modelli OpenAI: la combinazione di partenza (`gpt-4o` responder + `gpt-4o-mini` per tutto il resto) e la più recente (`gpt-5.4` + `gpt-5.4-mini`). I modelli sono configurabili via env (`LUME_MODEL_RESPONDER`, `LUME_MODEL_INTENT`, ecc.), così la scelta resta una decisione di esercizio operativo.
 
-Il responder (`gpt-4o`) è circa il 70% del costo per answer. Tutto il resto usa `gpt-4o-mini`.
+**Configurazione gpt-4o (baseline economica):**
+- Turno answer mediano: ~$0.012
+- Clarify / chat / escalation: ~$0.001
+- Latenza p50 answer: 8–10s
 
-Latenza p50 della answer: 8–10s.
+**Configurazione gpt-5.4 (qualità superiore):**
+- Turno answer mediano: ~$0.04–0.06 (3–5× più costoso)
+- Latenza media misurata sull'ultima eval baseline (18 casi, judge attivo): ~14s
+- Il salto di costo è guidato da `gpt-5.4-mini`, che è circa 5× il prezzo per token di `gpt-4o-mini` e copre 5+ chiamate per turno (router, intent, clarify, rerank, query generator)
+
+Il responder è ~70% del costo per turno in entrambe le configurazioni. Embedding fissi su `text-embedding-3-small` (il delta di qualità con modelli più grandi è invisibile a 300 prodotti, il delta di costo è 5×).
+
+**Quando vale gpt-5.4:** quando il fine-tuning del responder non è ancora pronto e la qualità del tono italiano è il driver di conversione. **Quando vale gpt-4o:** quando il volume di conversazioni rende il costo dominante, o quando la baseline qualitativa è già accettabile.
 
 ---
 

@@ -106,7 +106,24 @@ Tu: il secondo, qualcosa di simile
 Lumé: [altre tre proposte simili al prodotto scelto]
 ```
 
-**Escalation:**
+**Comparison (using context, no new options):**
+```
+Tu: che differenza c'è tra il primo e il secondo?
+Lumé: L'Atyab Violet (€65) è raffinato e cipriato — violetta su
+      iris e muschio bianco, più persistente. Il Cabotine Rose
+      (€32) è più fresco, una rosa con biancospino, perfetto per
+      ogni giorno. Quale ti convince di più?
+```
+
+**Off-topic / small talk (no retrieval, polite redirect):**
+```
+Tu: come si risolve un'equazione differenziale?
+Lumé: Mi piacerebbe aiutarti ma su matematica non sono il
+      riferimento giusto — sono l'assistente di profumeria di Lumé.
+      Su profumi, skincare o regali invece sì, dimmi pure cosa cerchi.
+```
+
+**Escalation (only for real cases: returns, refunds, B2B, frustration):**
 ```
 Tu: voglio restituire un ordine
 Lumé: Mi dispiace, ti passo subito a un operatore che ti
@@ -149,7 +166,14 @@ python -m eval.run --case C03 C15    # only specific cases
 
 Reports drop into `eval/runs/report_<timestamp>.{json,md}`.
 
-Baseline on the 18 included cases: 100% deterministic checks passing, judge means 3.95 / 3.95 / 4.0 on relevance / brand_voice / whatsapp_feel.
+**Baselines on the 18 included cases:**
+
+| Config | Pass | Judge (rel / brand / WhatsApp) | Mean latency |
+|---|---|---|---|
+| `gpt-4o` + `gpt-4o-mini` | 18/18 | 3.95 / 3.95 / 4.0 | ~11.5s |
+| `gpt-5.4` + `gpt-5.4-mini` (latest) | 17/18 | 3.9 / 3.85 / 3.85 | ~14s |
+
+The single regression on the gpt-5.4 run (C12, Christmas gift) is the model being more strict about probing gifts with unknown style — defensible behavior, the test case is the one to update.
 
 See [EVAL.md](EVAL.md) for the full eval philosophy and what I'd add for production.
 

@@ -69,6 +69,8 @@ _FALLBACK: dict[str, str] = {
     "escalate": "Capisco, passo la tua richiesta a un nostro operatore.",
     "no_match": "Al momento non ho trovato prodotti che corrispondano esattamente — posso aiutarti con criteri diversi?",
     "specification": "Ecco i dettagli del prodotto che hai scelto. Come posso aiutarti ancora?",
+    "chat": "Sono Lumé, l'assistente di profumeria. Dimmi pure cosa cerchi.",
+    "compare": "Posso confrontare i prodotti — dimmi quali ti interessano.",
 }
 
 

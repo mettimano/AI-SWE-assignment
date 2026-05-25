@@ -35,6 +35,8 @@ class RouterDecision(BaseModel):
         "selection",
         "new_topic",
         "escalate",
+        "chat",
+        "compare",
     ]
     """
     extract_intent   → fresh intent extraction (first turn or completely new search)
@@ -44,6 +46,9 @@ class RouterDecision(BaseModel):
     selection        → user picked a product: show details + trigger save_preferences
     new_topic        → user started a new independent search (resets intent + clarify_count)
     escalate         → returns/refunds/B2B/frustration → human handoff
+    chat             → off-topic / small talk / meta-question (no retrieval, polite redirect)
+    compare          → explain or compare specific products (uses context, retrieves only if needed,
+                       never proposes new alternatives the user didn't ask about)
     """
 
     selected_product_id: str | None = Field(
@@ -113,16 +118,36 @@ Il tuo compito è decidere quale azione eseguire. NON generi testo per il client
 "escalate"
   Reso, rimborso, stato ordine, B2B, frustrazione intensa.
   Il sistema risponderà con un messaggio empatico e passerà a un operatore umano.
+  NON usare escalate per domande off-topic o meta-domande — quelle vanno in "chat".
+
+"chat"
+  Domande off-topic, saluti, small talk, meta-domande sul sistema.
+  Esempi: "ciao", "come stai?", "che ore sono?", "come si risolve un'equazione differenziale?",
+  "chi sei?", "cosa puoi fare?", "grazie".
+  Il responder risponde direttamente con un messaggio caldo, ricordando il proprio ruolo
+  (assistente di profumeria) e re-indirizzando se è off-topic. NESSUN retrieval.
+  Lo stato (intent, last_shown) NON viene modificato — l'utente può riprendere la ricerca dopo.
+
+"compare"
+  L'utente vuole confrontare o farsi spiegare prodotti specifici (in contesto o no).
+  Esempi: "che differenza c'è tra il primo e il secondo?", "come differiscono X e Y?",
+  "sono simili come note?", "spiegami meglio entrambi", "qual è più intenso?".
+  Il sistema risponde usando i prodotti già in `last_shown` se sono pertinenti; se l'utente
+  nomina prodotti non in contesto, il sistema fa un retrieval mirato per recuperarli e poi
+  spiega. NON propone alternative nuove che l'utente non ha chiesto.
+  DIVERSO da "selection" (dettagli su UN prodotto) e da "refine_intent" (cerca altri simili).
 
 ════════ LOGICA DI ROUTING ════════════════════════════════════════════════════
 
-• Nessun intent precedente → "extract_intent"
-• Intent presente + utente seleziona prodotto → "selection"
+• Nessun intent precedente + richiesta shopping → "extract_intent"
+• Messaggio off-topic / saluto / meta → "chat"
+• Intent presente + utente vuole confrontare/spiegare prodotti → "compare"
+• Intent presente + utente seleziona UN prodotto → "selection"
 • Intent presente + utente cambia ricerca (autonoma) → "new_topic"
 • Intent presente + utente raffina criteri → "refine_intent"
 • Intent presente + info sufficienti → "answer"
 • Info insufficienti + clarify_count < 2 → "clarify_question"
-• Escalation trigger → "escalate"
+• Reso/rimborso/B2B/frustrazione → "escalate"
 
 Ricorda: "new_topic" = il SEGNALE di reset. Il sistema si occupa poi di chiamare extract_intent.
 """
@@ -230,6 +255,55 @@ _FEW_SHOT: list[dict] = [
     {
         "role": "assistant",
         "content": '{"action":"new_topic","selected_product_id":null,"reasoning":"Cambia categoria (profumo → make-up), nuova ricerca indipendente."}',
+    },
+    # Off-topic / meta — chat, no escalation
+    {
+        "role": "user",
+        "content": (
+            "STATO: intent={categories:[profumo], budget_max:80}, clarify_count=0, last_shown=[p_010, p_031, p_073].\n"
+            "MESSAGGIO: come si risolve un'equazione differenziale?"
+        ),
+    },
+    {
+        "role": "assistant",
+        "content": '{"action":"chat","selected_product_id":null,"reasoning":"Domanda off-topic non-shopping, non un trigger di escalation — il responder ringrazia e re-indirizza."}',
+    },
+    # Greeting at any point
+    {
+        "role": "user",
+        "content": (
+            "STATO: intent=nessuno, clarify_count=0, last_shown=nessuno.\n"
+            "MESSAGGIO: ciao!"
+        ),
+    },
+    {
+        "role": "assistant",
+        "content": '{"action":"chat","selected_product_id":null,"reasoning":"Saluto, non è ancora una richiesta shopping."}',
+    },
+    # Compare two products already shown
+    {
+        "role": "user",
+        "content": (
+            "STATO: intent={categories:[profumo]}, clarify_count=0, "
+            "last_shown=[p_010 Atyab Violet, p_031 Cabotine Rose, p_073 Patchouli Premier].\n"
+            "MESSAGGIO: che differenza c'è tra il primo e il secondo?"
+        ),
+    },
+    {
+        "role": "assistant",
+        "content": '{"action":"compare","selected_product_id":null,"reasoning":"L\'utente vuole confrontare due prodotti già mostrati, nessuna nuova raccomandazione."}',
+    },
+    # Compare two products NOT in last_shown — needs retrieval
+    {
+        "role": "user",
+        "content": (
+            "STATO: intent={categories:[profumo]}, clarify_count=0, last_shown=nessuno.\n"
+            "MESSAGGIO: come differiscono il Chanel Coco Mademoiselle e il Dior Sauvage?"
+        ),
+    },
+    {
+        "role": "assistant",
+        "content": '{"action":"compare","selected_product_id":null,"reasoning":"L\'utente nomina prodotti specifici da confrontare ma non sono in contesto — il sistema farà retrieval mirato."}',
     },
 ]
 

@@ -19,7 +19,16 @@ class Recommendation(BaseModel):
 
 
 class Reply(BaseModel):
-    mode: Literal["answer", "clarify_question", "clarify_probe", "escalate", "no_match", "specification"]
+    mode: Literal[
+        "answer",
+        "clarify_question",
+        "clarify_probe",
+        "escalate",
+        "no_match",
+        "specification",
+        "chat",      # off-topic / small talk / meta — polite redirect, no retrieval
+        "compare",   # comparison or explanation of products already in context, no new options
+    ]
     reply_text: str                                    # WhatsApp-style plain text
     recommendations: list[Recommendation] = Field(default_factory=list)   # mode=answer
     questions: list[ClarifyQuestion] = Field(default_factory=list)        # mode=clarify_question

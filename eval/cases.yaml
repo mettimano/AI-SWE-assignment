@@ -1,0 +1,295 @@
+# Lumé evaluation cases
+#
+# Structure:
+#   id          — unique case ID
+#   description — human-readable summary
+#   user_id     — optional; null for anonymous, "_seed_giulia" for returning-user cases
+#   multi_turn  — true when state flows across turns
+#   turns       — list of {message, expected_mode?, checks?}
+#
+# checks dict per turn: each key maps to a check function in deterministic.py.
+#   - true/false: apply the check with default params
+#   - string value (mode_matches, language_match): compare against this value
+
+cases:
+
+  # ── Single-turn: retrieval correctness ───────────────────────────────────────
+
+  - id: C01
+    description: "Explicit fragrance with budget and gender"
+    user_id: null
+    multi_turn: false
+    turns:
+      - message: "un EDP legnoso da uomo, budget 100"
+        expected_mode: answer
+        checks:
+          mode_matches: answer
+          budget_respected: true
+          in_stock_first: true
+          cite_only_catalog: true
+          no_markdown: true
+          no_medical_claims: true
+          max_emoji_1: true
+
+  - id: C02
+    description: "Explicit skincare request (answer or clarify_probe both valid)"
+    user_id: null
+    multi_turn: false
+    turns:
+      - message: "crema viso per pelle secca"
+        expected_mode: answer
+        checks:
+          in_stock_first: true
+          cite_only_catalog: true
+          no_markdown: true
+          no_medical_claims: true
+          max_emoji_1: true
+
+  - id: C03
+    description: "Implicit gift with floral family and budget"
+    user_id: null
+    multi_turn: false
+    turns:
+      - message: "regalo per mia madre, le piacciono i fiori, budget 80€"
+        expected_mode: answer
+        checks:
+          mode_matches: answer
+          budget_respected: true
+          in_stock_first: true
+          cite_only_catalog: true
+          no_markdown: true
+          no_medical_claims: true
+          max_emoji_1: true
+
+  - id: C04
+    description: "Hard budget cap — strict enforcement"
+    user_id: null
+    multi_turn: false
+    turns:
+      - message: "profumo sotto i 50€"
+        expected_mode: answer
+        checks:
+          mode_matches: answer
+          budget_respected: true
+          in_stock_first: true
+          cite_only_catalog: true
+          no_markdown: true
+          max_emoji_1: true
+
+  - id: C05
+    description: "Negation — no oud"
+    user_id: null
+    multi_turn: false
+    turns:
+      - message: "profumo da uomo, budget 120€, niente oud"
+        expected_mode: answer
+        checks:
+          mode_matches: answer
+          budget_respected: true
+          in_stock_first: true
+          cite_only_catalog: true
+          no_markdown: true
+          no_oud_cited: true
+
+  - id: C06
+    description: "Niche preference without hard budget"
+    user_id: null
+    multi_turn: false
+    turns:
+      - message: "qualcosa di nicchia da provare, budget 200€"
+        expected_mode: answer
+        checks:
+          mode_matches: answer
+          budget_respected: true
+          in_stock_first: true
+          cite_only_catalog: true
+          no_markdown: true
+          max_emoji_1: true
+
+  - id: C07
+    description: "Luxury upgrade"
+    user_id: null
+    multi_turn: false
+    turns:
+      - message: "voglio qualcosa di più luxury, un profumo donna, budget 250€"
+        expected_mode: answer
+        checks:
+          mode_matches: answer
+          budget_respected: true
+          in_stock_first: true
+          cite_only_catalog: true
+          no_markdown: true
+          max_emoji_1: true
+
+  - id: C08
+    description: "Specific brand query — Creed (tester may be only available option)"
+    user_id: null
+    multi_turn: false
+    turns:
+      - message: "cercate profumo Creed, budget 500€"
+        expected_mode: answer
+        checks:
+          cite_only_catalog: true
+          no_markdown: true
+          max_emoji_1: true
+
+  - id: C09
+    description: "English language query"
+    user_id: null
+    multi_turn: false
+    turns:
+      - message: "a fresh perfume for summer under 60€"
+        expected_mode: answer
+        checks:
+          mode_matches: answer
+          budget_respected: true
+          in_stock_first: true
+          cite_only_catalog: true
+          no_markdown: true
+          language_match: en
+
+  # ── Single-turn: special handling ────────────────────────────────────────────
+
+  - id: C10
+    description: "Escalation — return / refund request"
+    user_id: null
+    multi_turn: false
+    turns:
+      - message: "voglio restituire un ordine che ho ricevuto rotto"
+        expected_mode: escalate
+        checks:
+          mode_matches: escalate
+          escalation_no_products: true
+          needs_human_flag: true
+          no_markdown: true
+
+  - id: C11
+    description: "Tester request"
+    user_id: null
+    multi_turn: false
+    turns:
+      - message: "avete tester in sconto? profumo uomo sotto 50 euro"
+        expected_mode: answer
+        checks:
+          mode_matches: answer
+          cite_only_catalog: true
+          no_markdown: true
+          in_stock_first: true
+          max_emoji_1: true
+
+  - id: C12
+    description: "Christmas gift for woman"
+    user_id: null
+    multi_turn: false
+    turns:
+      - message: "cerco un regalo di natale particolare per una donna, budget 90€"
+        expected_mode: answer
+        checks:
+          mode_matches: answer
+          budget_respected: true
+          in_stock_first: true
+          cite_only_catalog: true
+          no_markdown: true
+          no_medical_claims: true
+
+  # ── Clarification ─────────────────────────────────────────────────────────────
+
+  - id: C13
+    description: "Clarify-question trigger — underspecified gift"
+    user_id: null
+    multi_turn: false
+    turns:
+      - message: "vorrei regalare un profumo"
+        expected_mode: clarify_question
+        checks:
+          mode_matches: clarify_question
+          clarify_question_count_le_2: true
+          no_products_in_clarify: true
+          no_markdown: true
+          max_emoji_1: true
+
+  - id: C14
+    description: "Clarify-probe trigger — vague fragrance with budget"
+    user_id: null
+    multi_turn: false
+    turns:
+      - message: "un profumo per me, ho budget 80€"
+        expected_mode: clarify_probe
+        checks:
+          cite_only_catalog: true
+          no_markdown: true
+          max_emoji_1: true
+          probe_count_in_range_if_probe: true
+
+  # ── Multi-turn ────────────────────────────────────────────────────────────────
+
+  - id: C15
+    description: "Multi-turn refinement — cheaper option in same family"
+    user_id: null
+    multi_turn: true
+    turns:
+      - message: "regalo per mia madre, le piacciono i fiori, budget 80€"
+        expected_mode: answer
+        checks:
+          mode_matches: answer
+          budget_respected: true
+          in_stock_first: true
+          cite_only_catalog: true
+      - message: "qualcosa di più economico"
+        expected_mode: answer
+        checks:
+          mode_matches: answer
+          in_stock_first: true
+          cite_only_catalog: true
+          no_markdown: true
+          max_emoji_1: true
+
+  - id: C16
+    description: "Multi-turn selection — pick second, find similar"
+    user_id: null
+    multi_turn: true
+    turns:
+      - message: "regalo per mia madre, le piacciono i fiori, budget 80€"
+        expected_mode: answer
+        checks:
+          mode_matches: answer
+          in_stock_first: true
+          cite_only_catalog: true
+      - message: "il secondo, voglio qualcosa di simile"
+        expected_mode: answer
+        checks:
+          mode_matches: answer
+          cite_only_catalog: true
+          in_stock_first: true
+          no_markdown: true
+          max_emoji_1: true
+
+  # ── Returning-user memory ──────────────────────────────────────────────────────
+
+  - id: C17
+    description: "Returning user — memory priors, vague query (answer or probe both valid)"
+    user_id: "_seed_giulia"
+    multi_turn: false
+    turns:
+      - message: "un nuovo profumo da provare"
+        expected_mode: answer
+        checks:
+          cite_only_catalog: true
+          no_markdown: true
+          max_emoji_1: true
+
+  - id: C18
+    description: "Returning user — specific query, memory budget + no-oud enforced"
+    user_id: "_seed_giulia"
+    multi_turn: false
+    turns:
+      - message: "cercami qualcosa di floreale o muschiato che non ho ancora provato"
+        expected_mode: answer
+        checks:
+          mode_matches: answer
+          in_stock_first: true
+          cite_only_catalog: true
+          no_markdown: true
+          max_emoji_1: true
+          no_oud_cited: true
+          memory_budget_respected: true

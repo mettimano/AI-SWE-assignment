@@ -13,7 +13,7 @@ Hard constraints enforced by the graph (override router if violated):
   • guard runs automatically on every output (not router-callable)
 
 State that persists across turns (managed by caller / REPL):
-  current_intent, last_shown_product_ids, last_shown_products, topic_messages,
+  current_intent, last_shown_product_ids, last_shown_products, topic_history,
   clarify_count, last_action, last_shown_mode
 """
 
@@ -27,7 +27,7 @@ from langgraph.graph import END, START, StateGraph
 from lume.agents.clarify import build_clarify_payload
 from lume.agents.constraints import apply as apply_constraints
 from lume.agents.constraints import soft_instructions
-from lume.agents.intent import Intent, extract_intent, intent_to_query, refine_intent
+from lume.agents.intent import Intent, extract_intent, refine_intent
 from lume.agents.router import RouterDecision, route
 from lume.agents.selection import get_selected_product, infer_and_save_preferences
 from lume.catalog.loader import load_products
@@ -75,18 +75,19 @@ class ConversationState(TypedDict, total=False):
     current_intent: Intent | None
     last_shown_product_ids: list[str]
     last_shown_products: list[NormalizedProduct]
-    topic_messages: list[str]  # all user messages since last new_topic; used to build retrieval query
-    clarify_count: int        # 0-2; resets on new_topic
-    last_action: str | None   # last action taken (prevents consecutive extract_intent)
+    topic_history: list[dict]  # full convo since last new_topic: [{"role": "user"|"assistant", "content": str}]
+    clarify_count: int         # 0-2; resets on new_topic
+    last_action: str | None    # last action taken (prevents consecutive extract_intent)
 
     # ── Set during graph run ──
     user_profile: UserProfile | None
     router_decision: RouterDecision | None
-    effective_action: str     # after constraint enforcement
+    effective_action: str      # after constraint enforcement
     candidates: list[NormalizedProduct]
     oos_fallback: list[NormalizedProduct]
     selected_product: NormalizedProduct | None  # set by node_selection, read by node_save_preferences
     last_shown_mode: str | None  # "answer" | "clarify_probe" | "clarify_question" — drives post-selection routing
+    retrieval_query: str | None  # cached LLM-generated query; set by node_retrieve, consumed by node_rerank
     reply: Reply | None
     _t_start: float
 
@@ -136,17 +137,25 @@ def _enforce_constraints(state: ConversationState, decision: RouterDecision) -> 
 def node_load_profile(state: ConversationState) -> dict:
     user_id = state.get("user_id")
     profile = load_or_init(user_id) if user_id else None
-    return {"user_profile": profile, "_t_start": time.perf_counter()}
+    # Append current user message to conversation history (done once per turn here,
+    # before any agent node runs). node_new_topic overrides this with a full reset.
+    existing = state.get("topic_history") or []
+    topic_history = existing + [{"role": "user", "content": state["message"]}]
+    return {"user_profile": profile, "_t_start": time.perf_counter(), "topic_history": topic_history}
 
 
 def node_router(state: ConversationState) -> dict:
     """Call the router LLM, then enforce hard constraints."""
+    topic_history = state.get("topic_history") or []
+    # Pass history without the current message (it's in the MESSAGGIO field)
+    history_ctx = topic_history[:-1] if topic_history else []
     decision = route(
         message=state["message"],
         current_intent=state.get("current_intent"),
         last_shown=state.get("last_shown_products") or [],
         clarify_count=state.get("clarify_count", 0),
         last_action=state.get("last_action"),
+        topic_history=history_ctx,
     )
     effective = _enforce_constraints(state, decision)
     return {"router_decision": decision, "effective_action": effective}
@@ -155,35 +164,72 @@ def node_router(state: ConversationState) -> dict:
 def node_new_topic(state: ConversationState) -> dict:
     """Reset all intent state, then extract a fresh intent."""
     profile = state.get("user_profile")
-    intent = extract_intent(state["message"], profile)
+    # New topic: no history context for intent extraction (clean slate)
+    intent = extract_intent(state["message"], profile, topic_history=None)
+    intent = _apply_profile_defaults(intent, profile)
     return {
         "current_intent": intent,
         "last_shown_product_ids": [],
         "last_shown_products": [],
-        "topic_messages": [state["message"]],  # reset — new topic starts here
-        "last_shown_mode": None,               # clear stale probe/answer mode from previous topic
+        # Reset conversation history; node_load_profile already appended the user
+        # message, so we reset to just that one entry.
+        "topic_history": [{"role": "user", "content": state["message"]}],
+        "last_shown_mode": None,   # clear stale probe/answer mode from previous topic
         "clarify_count": 0,
         "last_action": "extract_intent",
+        "retrieval_query": None,
     }
+
+
+def _apply_profile_defaults(intent: Intent, profile: UserProfile | None) -> Intent:
+    """Fill missing critical intent fields from the user's stored profile.
+
+    A returning user shouldn't have to repeat their known budget or gender every
+    message. The intent LLM is instructed to use profile defaults, but we apply
+    them deterministically here as a fallback to keep routing reliable.
+    """
+    if profile is None:
+        return intent
+    prefs = profile.known_preferences
+    updates: dict = {}
+    missing = list(intent.missing_critical_fields)
+
+    if intent.budget_max is None and prefs.budget_max is not None:
+        updates["budget_max"] = prefs.budget_max
+        missing = [f for f in missing if f != "budget_max"]
+
+    if intent.gender_lean is None and prefs.gender_lean:
+        updates["gender_lean"] = prefs.gender_lean
+        missing = [f for f in missing if f != "gender_lean"]
+
+    if updates:
+        updates["missing_critical_fields"] = missing
+        return intent.model_copy(update=updates)
+    return intent
 
 
 def node_extract_intent(state: ConversationState) -> dict:
     profile = state.get("user_profile")
-    intent = extract_intent(state["message"], profile)
-    topic = (state.get("topic_messages") or []) + [state["message"]]
-    return {"current_intent": intent, "topic_messages": topic, "last_action": "extract_intent"}
+    topic_history = state.get("topic_history") or []
+    # Pass history without the current message (already the LLM user turn)
+    history_ctx = topic_history[:-1] if topic_history else []
+    intent = extract_intent(state["message"], profile, topic_history=history_ctx)
+    intent = _apply_profile_defaults(intent, profile)
+    return {"current_intent": intent, "last_action": "extract_intent"}
 
 
 def node_refine_intent(state: ConversationState) -> dict:
     profile = state.get("user_profile")
+    topic_history = state.get("topic_history") or []
+    history_ctx = topic_history[:-1] if topic_history else []
     intent = refine_intent(
         state["message"],
         state["current_intent"],
         state.get("last_shown_products") or [],
         profile,
+        topic_history=history_ctx,
     )
-    topic = (state.get("topic_messages") or []) + [state["message"]]
-    return {"current_intent": intent, "topic_messages": topic, "last_action": "refine_intent"}
+    return {"current_intent": intent, "last_action": "refine_intent"}
 
 
 def node_route_after_intent(state: ConversationState) -> dict:
@@ -197,7 +243,8 @@ def node_clarify(state: ConversationState) -> dict:
 
     intent: Intent = state["current_intent"]
     candidates = state.get("candidates") or []
-    payload = build_clarify_payload(intent, candidates)
+    topic_history = state.get("topic_history") or []
+    payload = build_clarify_payload(intent, candidates, topic_history=topic_history)
     t_start = state.get("_t_start", time.perf_counter())
 
     reply = generate_response(
@@ -208,6 +255,7 @@ def node_clarify(state: ConversationState) -> dict:
         oos_fallback=[],
         user_profile=state.get("user_profile"),
         clarify_payload=payload,
+        topic_history=topic_history,
     )
     reply.questions = payload.questions
     reply.probes = payload.probes
@@ -219,6 +267,8 @@ def node_clarify(state: ConversationState) -> dict:
     id_to_candidate = {p.product_id: p for p in candidates}
     probe_products = [id_to_candidate[pid] for pid in probe_ids if pid in id_to_candidate]
 
+    updated_history = topic_history + [{"role": "assistant", "content": reply.reply_text}]
+
     return {
         "reply": reply,
         "last_action": reply.mode,         # "clarify_question" or "clarify_probe"
@@ -226,16 +276,40 @@ def node_clarify(state: ConversationState) -> dict:
         "last_shown_products": probe_products,
         "last_shown_product_ids": probe_ids,
         "clarify_count": state.get("clarify_count", 0) + 1,
+        "topic_history": updated_history,
     }
 
 
 def node_retrieve(state: ConversationState) -> dict:
+    from lume.retrieval.query import generate_retrieval_query  # noqa: PLC0415
+
     intent: Intent = state["current_intent"]
     catalog, bm25 = _ensure_resources()
 
-    query = intent_to_query(intent, state.get("topic_messages")) or state["message"]
+    topic_history = state.get("topic_history") or []
+    # After probe selection, the retrieval query was built from the selected
+    # product's qualities in node_selection — use it directly instead of asking
+    # the LLM to interpret the ambiguous selection text ("il terzo", etc.).
+    is_post_probe = (
+        state.get("last_action") == "selection"
+        and state.get("last_shown_mode") == "clarify_probe"
+    )
+    if is_post_probe and state.get("retrieval_query"):
+        query = state["retrieval_query"]
+    else:
+        query = generate_retrieval_query(topic_history, intent) or state["message"]
+    id_map = {p.product_id: p for p in catalog}
+
+    # When the user explicitly asked for testers, restrict both retrieval paths so
+    # only is_tester=True products surface before reranking.
+    tester_only = getattr(intent, "tester_requested", False)
     bm25_results = bm25.query(query, top_k=30)
-    vector_results = query_vector(query, top_k=30)
+    if tester_only:
+        bm25_results = [(pid, s) for pid, s in bm25_results if id_map.get(pid) and id_map[pid].is_tester]
+
+    vector_where = {"is_tester": True} if tester_only else None
+    vector_results = query_vector(query, top_k=30, where=vector_where)
+
     fused_ids = hybrid_search(
         bm25_results,
         vector_results,
@@ -243,9 +317,8 @@ def node_retrieve(state: ConversationState) -> dict:
         vector_weight=intent.vector_weight,
         top_n=20,
     )
-    id_map = {p.product_id: p for p in catalog}
     candidates = [id_map[pid] for pid in fused_ids if pid in id_map]
-    return {"candidates": candidates}
+    return {"candidates": candidates, "retrieval_query": query}
 
 
 def node_constrain(state: ConversationState) -> dict:
@@ -258,7 +331,7 @@ def node_rerank(state: ConversationState) -> dict:
 
     intent: Intent = state["current_intent"]
     profile = state.get("user_profile")
-    query = intent_to_query(intent, state.get("topic_messages")) or state["message"]
+    query = state.get("retrieval_query") or state["message"]
     reranked = llm_rerank(
         query,
         state.get("candidates", []),
@@ -276,14 +349,36 @@ def node_answer(state: ConversationState) -> dict:
     candidates: list[NormalizedProduct] = state.get("candidates", [])
     mode = "answer" if candidates else "no_match"
     t_start = state.get("_t_start", time.perf_counter())
+    topic_history = state.get("topic_history") or []
+
+    # After probe selection the user's message is a selection reference ("il terzo")
+    # which confuses the responder into giving details about one product. Build an
+    # explicit "find similar" message from the selected product so the responder
+    # presents 2-4 alternatives instead.
+    is_post_probe = (
+        state.get("last_action") == "selection"
+        and state.get("last_shown_mode") == "clarify_probe"
+    )
+    if is_post_probe:
+        selected: NormalizedProduct | None = state.get("selected_product")
+        if selected:
+            responder_message = (
+                f"Trovami profumi simili a {selected.title}, "
+                "stesso stile e caratteristiche."
+            )
+        else:
+            responder_message = state.get("retrieval_query") or state["message"]
+    else:
+        responder_message = state["message"]
 
     reply = generate_response(
-        message=state["message"],
+        message=responder_message,
         mode=mode,
         intent=intent,
         candidates=candidates,
         oos_fallback=state.get("oos_fallback", []),
         user_profile=state.get("user_profile"),
+        topic_history=topic_history,
     )
     reply.debug["latency_ms"] = int((time.perf_counter() - t_start) * 1000)
     reply.user_id = state.get("user_id")
@@ -293,12 +388,15 @@ def node_answer(state: ConversationState) -> dict:
     id_map = {p.product_id: p for p in catalog}
     shown_products = [id_map[pid] for pid in shown_ids if pid in id_map]
 
+    updated_history = topic_history + [{"role": "assistant", "content": reply.reply_text}]
+
     return {
         "reply": reply,
         "last_shown_product_ids": shown_ids,
         "last_shown_products": shown_products,
         "last_shown_mode": "answer",
         "last_action": "answer",
+        "topic_history": updated_history,
     }
 
 
@@ -321,10 +419,11 @@ def node_selection(state: ConversationState) -> dict:
     intent: Intent = state["current_intent"]
     t_start = state.get("_t_start", time.perf_counter())
 
+    topic_history = state.get("topic_history") or []
     result: dict = {"selected_product": product, "last_action": "selection"}
 
     if state.get("last_shown_mode") == "clarify_probe" and not product:
-        # Probe selected but product not found in catalog — fall back to specification mode
+        # Probe selected but product not found in catalog — fall back to no_match
         result["reply"] = generate_response(
             message=state["message"],
             mode="no_match",
@@ -332,13 +431,17 @@ def node_selection(state: ConversationState) -> dict:
             candidates=[],
             oos_fallback=[],
             user_profile=state.get("user_profile"),
+            topic_history=topic_history,
         )
         result["reply"].debug["latency_ms"] = int((time.perf_counter() - t_start) * 1000)
         result["reply"].user_id = state.get("user_id")
+        result["topic_history"] = topic_history + [{"role": "assistant", "content": result["reply"].reply_text}]
         return result
 
     if state.get("last_shown_mode") == "clarify_probe" and product:
-        # Use selected probe as a style anchor: refine intent, then re-run retrieval
+        # Use selected probe as a style anchor: refine intent, then re-run retrieval.
+        # The full conversation history gives refine_intent rich context about which
+        # probe product was shown and what the user chose.
         profile = state.get("user_profile")
         synthetic_msg = (
             f"Ho scelto '{product.title}'. "
@@ -349,13 +452,16 @@ def node_selection(state: ConversationState) -> dict:
             intent,
             last_shown=state.get("last_shown_products") or [],
             user_profile=profile,
+            topic_history=topic_history,
         )
-        # Clear clarify state: ambiguity resolved
+        # Ambiguity resolved — set clarify_count to max so route_after_constrain
+        # never triggers another probe regardless of the updated intent's confidence.
         result["current_intent"] = updated_intent
-        result["clarify_count"] = 0
-        # topic_messages gets synthetic_msg appended so intent_to_query has the style signal
-        result["topic_messages"] = (state.get("topic_messages") or []) + [synthetic_msg]
-        # No reply here — node_answer will generate the response after re-retrieval
+        result["clarify_count"] = 2
+        # Pre-build the retrieval query from the selected product's qualities so
+        # node_retrieve doesn't misinterpret the user's selection text ("il terzo").
+        result["retrieval_query"] = product.search_text
+        # No reply here — node_answer generates the response after re-retrieval
     else:
         candidates = [product] if product else []
         reply = generate_response(
@@ -365,10 +471,12 @@ def node_selection(state: ConversationState) -> dict:
             candidates=candidates,
             oos_fallback=[],
             user_profile=state.get("user_profile"),
+            topic_history=topic_history,
         )
         reply.debug["latency_ms"] = int((time.perf_counter() - t_start) * 1000)
         reply.user_id = state.get("user_id")
         result["reply"] = reply
+        result["topic_history"] = topic_history + [{"role": "assistant", "content": reply.reply_text}]
 
     return result
 
@@ -388,6 +496,7 @@ def node_escalate(state: ConversationState) -> dict:
 
     intent: Intent = state.get("current_intent") or Intent()
     t_start = state.get("_t_start", time.perf_counter())
+    topic_history = state.get("topic_history") or []
     reply = generate_response(
         message=state["message"],
         mode="escalate",
@@ -395,11 +504,13 @@ def node_escalate(state: ConversationState) -> dict:
         candidates=[],
         oos_fallback=[],
         user_profile=state.get("user_profile"),
+        topic_history=topic_history,
     )
     reply.needs_human = True
     reply.debug["latency_ms"] = int((time.perf_counter() - t_start) * 1000)
     reply.user_id = state.get("user_id")
-    return {"reply": reply, "last_action": "escalate"}
+    updated_history = topic_history + [{"role": "assistant", "content": reply.reply_text}]
+    return {"reply": reply, "last_action": "escalate", "topic_history": updated_history}
 
 
 def node_guard(state: ConversationState) -> dict:
@@ -440,7 +551,10 @@ def route_after_intent(state: ConversationState) -> str:
     # Only short-circuit to clarify when a hard-filter field is absent (question mode).
     # Probe mode needs candidates → decided after constrain.
     critical_missing = bool(set(intent.missing_critical_fields) & {"budget_max", "categories"})
-    if critical_missing and clarify_count < 2:
+    # Only auto-clarify on the first pass. If the user already received a question and
+    # still hasn't provided the info, we proceed to retrieval with what we have rather
+    # than asking the same question again.
+    if critical_missing and clarify_count == 0:
         return "clarify"
     return "retrieve"
 
@@ -571,9 +685,10 @@ def run_turn(
     current_intent: Intent | None = None,
     last_shown_product_ids: list[str] | None = None,
     last_shown_products: list[NormalizedProduct] | None = None,
-    topic_messages: list[str] | None = None,
+    topic_history: list[dict] | None = None,
     clarify_count: int = 0,
     last_action: str | None = None,
+    last_shown_mode: str | None = None,
 ) -> dict[str, Any]:
     """Run one conversation turn. Returns full state dict for caller to persist.
 
@@ -586,8 +701,9 @@ def run_turn(
         "current_intent": current_intent,
         "last_shown_product_ids": last_shown_product_ids or [],
         "last_shown_products": last_shown_products or [],
-        "topic_messages": topic_messages or [],
+        "topic_history": topic_history or [],
         "clarify_count": clarify_count,
         "last_action": last_action,
+        "last_shown_mode": last_shown_mode,
     }
     return get_graph().invoke(state)

@@ -1,0 +1,133 @@
+[
+  {
+    "_note": "Run `python -m eval.run --judge` then fill reply_text from the output and rate manually on a 1-5 scale per axis.",
+    "_axes": {
+      "relevance": "1=off-target, 3=reasonable, 5=perfect match for the request",
+      "brand_voice": "1=robotic/generic, 3=correct but neutral, 5=warm expert consultant",
+      "whatsapp_feel": "1=formal email, 3=acceptable, 5=natural WhatsApp DM"
+    }
+  },
+  {
+    "case_id": "C01",
+    "turn": 0,
+    "query": "un EDP legnoso da uomo, budget 100",
+    "reply_text": null,
+    "human_ratings": {
+      "relevance": null,
+      "brand_voice": null,
+      "whatsapp_feel": null
+    },
+    "notes": ""
+  },
+  {
+    "case_id": "C03",
+    "turn": 0,
+    "query": "regalo per mia madre, le piacciono i fiori, budget 80€",
+    "reply_text": null,
+    "human_ratings": {
+      "relevance": null,
+      "brand_voice": null,
+      "whatsapp_feel": null
+    },
+    "notes": ""
+  },
+  {
+    "case_id": "C05",
+    "turn": 0,
+    "query": "profumo da uomo, budget 120€, niente oud",
+    "reply_text": null,
+    "human_ratings": {
+      "relevance": null,
+      "brand_voice": null,
+      "whatsapp_feel": null
+    },
+    "notes": ""
+  },
+  {
+    "case_id": "C09",
+    "turn": 0,
+    "query": "a fresh perfume for summer under 60€",
+    "reply_text": null,
+    "human_ratings": {
+      "relevance": null,
+      "brand_voice": null,
+      "whatsapp_feel": null
+    },
+    "notes": ""
+  },
+  {
+    "case_id": "C10",
+    "turn": 0,
+    "query": "voglio restituire un ordine che ho ricevuto rotto",
+    "reply_text": null,
+    "human_ratings": {
+      "relevance": null,
+      "brand_voice": null,
+      "whatsapp_feel": null
+    },
+    "notes": "escalation — relevance means: does the reply acknowledge the issue empathetically?"
+  },
+  {
+    "case_id": "C12",
+    "turn": 0,
+    "query": "cerco un regalo di natale particolare per una donna, budget 90€",
+    "reply_text": null,
+    "human_ratings": {
+      "relevance": null,
+      "brand_voice": null,
+      "whatsapp_feel": null
+    },
+    "notes": ""
+  },
+  {
+    "case_id": "C13",
+    "turn": 0,
+    "query": "vorrei regalare un profumo",
+    "reply_text": null,
+    "human_ratings": {
+      "relevance": null,
+      "brand_voice": null,
+      "whatsapp_feel": null
+    },
+    "notes": "clarify_question — relevance: does it ask the right questions to unblock the request?"
+  },
+  {
+    "case_id": "C15",
+    "turn": 1,
+    "query": "qualcosa di più economico",
+    "context_turn_0": "regalo per mia madre, le piacciono i fiori, budget 80€",
+    "reply_text": null,
+    "human_ratings": {
+      "relevance": null,
+      "brand_voice": null,
+      "whatsapp_feel": null
+    },
+    "notes": "multi-turn refinement — relevance: cheaper floral options found?"
+  },
+  {
+    "case_id": "C16",
+    "turn": 1,
+    "query": "il secondo, voglio qualcosa di simile",
+    "context_turn_0": "regalo per mia madre, le piacciono i fiori, budget 80€",
+    "reply_text": null,
+    "human_ratings": {
+      "relevance": null,
+      "brand_voice": null,
+      "whatsapp_feel": null
+    },
+    "notes": "multi-turn selection — relevance: new picks share style with the selected product?"
+  },
+  {
+    "case_id": "C17",
+    "turn": 0,
+    "query": "un nuovo profumo da provare",
+    "user_id": "_seed_giulia",
+    "reply_text": null,
+    "human_ratings": {
+      "relevance": null,
+      "brand_voice": null,
+      "whatsapp_feel": null
+    },
+    "notes": "returning-user memory — does the reply align with giulia's floral/niche/no-oud profile?"
+  }
+]

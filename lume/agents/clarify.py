@@ -62,12 +62,28 @@ class _QuestionResponse(BaseModel):
     questions: list[str]
 
 
-def _generate_questions(intent: Intent, language: str) -> list[ClarifyQuestion]:
+def _generate_questions(
+    intent: Intent,
+    language: str,
+    topic_history: list[dict] | None = None,
+) -> list[ClarifyQuestion]:
     missing = intent.missing_critical_fields
     lang_note = " Rispondi in inglese." if language == "en" else ""
+    history_note = ""
+    if topic_history:
+        recent = topic_history[-6:]
+        lines = []
+        for msg in recent:
+            role = "Cliente" if msg["role"] == "user" else "Lumé"
+            lines.append(f"  {role}: {msg['content'][:150]}")
+        history_note = (
+            "\nStorico conversazione (NON ripetere domande già poste):\n"
+            + "\n".join(lines)
+        )
     prompt = (
         f"Categoria richiesta: {intent.categories or 'non specificata'}.\n"
-        f"Campi mancanti: {missing}.\n"
+        f"Campi mancanti: {missing}."
+        f"{history_note}\n"
         f"Scrivi le domande necessarie.{lang_note}"
     )
     client = OpenAI(api_key=require_openai_key())
@@ -159,15 +175,16 @@ def _select_probes(
 def build_clarify_payload(
     intent: Intent,
     candidates: list[NormalizedProduct],
+    topic_history: list[dict] | None = None,
 ) -> ClarifyPayload:
     """Decide ask-vs-probe and generate the clarification payload.
 
     Decision rule:
-      - Any missing_critical_field in {budget_max, gender_lean, categories} → ask (max 2 Qs)
+      - Any missing_critical_field in {budget_max, categories} → ask (max 1 Q)
       - confidence < threshold AND categories known → probe (2–4 spanning products)
     """
     if _needs_question(intent):
-        questions = _generate_questions(intent, intent.language)
+        questions = _generate_questions(intent, intent.language, topic_history)
         framing = (
             "Certo! Per aiutarti al meglio ho bisogno di qualche info in più 😊"
             if intent.language == "it"

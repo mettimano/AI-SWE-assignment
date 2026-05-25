@@ -36,7 +36,7 @@ class _Session:
     current_intent: Intent | None = None
     last_shown_product_ids: list[str] = field(default_factory=list)
     last_shown_products: list[NormalizedProduct] = field(default_factory=list)
-    topic_messages: list[str] = field(default_factory=list)
+    topic_history: list[dict] = field(default_factory=list)
     clarify_count: int = 0
     last_action: str | None = None
     last_shown_mode: str | None = None
@@ -46,7 +46,7 @@ class _Session:
             "current_intent",
             "last_shown_product_ids",
             "last_shown_products",
-            "topic_messages",
+            "topic_history",
             "clarify_count",
             "last_action",
             "last_shown_mode",
@@ -60,9 +60,10 @@ class _Session:
             "current_intent": self.current_intent,
             "last_shown_product_ids": self.last_shown_product_ids,
             "last_shown_products": self.last_shown_products,
-            "topic_messages": self.topic_messages,
+            "topic_history": self.topic_history,
             "clarify_count": self.clarify_count,
             "last_action": self.last_action,
+            "last_shown_mode": self.last_shown_mode,
         }
 
 

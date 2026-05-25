@@ -19,10 +19,22 @@ if TYPE_CHECKING:
     from lume.catalog.models import NormalizedProduct
 
 
+# ── Conversation history helper ───────────────────────────────────────────────
+
+def _format_history(history: list[dict], max_msgs: int = 6) -> str:
+    """Format the last N messages of topic_history as readable context."""
+    recent = history[-max_msgs:]
+    lines = []
+    for msg in recent:
+        role = "Cliente" if msg["role"] == "user" else "Lumé"
+        lines.append(f"{role}: {msg['content'][:200]}")
+    return "\n".join(lines)
+
+
 # ── Intent schema ─────────────────────────────────────────────────────────────
 
 class Intent(BaseModel):
-    language: Literal["it", "en"] = "it"
+    language: str = Field("it", description="BCP-47 language code of the user's message (it, en, fr, de, es, …)")
     categories: list[str] = Field(default_factory=list)
     budget_max: float | None = None
     fragrance_family: list[str] = Field(default_factory=list)
@@ -32,6 +44,7 @@ class Intent(BaseModel):
     must_avoid: list[str] = Field(default_factory=list)
     must_include: list[str] = Field(default_factory=list)
     niche_preference: bool | None = None
+    tester_requested: bool = False
     escalate: bool = False
     confidence: float = Field(1.0, ge=0.0, le=1.0)
     missing_critical_fields: list[str] = Field(default_factory=list)
@@ -71,12 +84,18 @@ def intent_to_query(intent: Intent, topic_messages: list[str] | None = None) -> 
 
 _EXTRACTION_RULES = """\
 ─── Regole di estrazione ────────────────────────────────────────────────────────
+language: OBBLIGATORIO — rileva la lingua del messaggio.
+  Esempi: "a fresh perfume for summer" → "en", "cerco un profumo" → "it",
+  "je cherche un parfum" → "fr", "ich suche ein Parfüm" → "de".
+  NON inferire dall'argomento o dal contesto: guarda SOLO la lingua del testo.
+  Se il messaggio è in inglese, language="en" — SEMPRE.
 categories: slug italiani: "profumo", "crema-viso", "make-up", "skincare", "corpo", "set-regalo".
 budget_max: solo se ESPLICITAMENTE menzionato. None altrimenti.
 fragrance_family: floreale, legnoso, orientale, agrumato, muschiato, speziato,
   acquatico, gourmand, cipriato, verde, fougère.
 gender_lean: "uomo"/"donna"/"unisex" se esplicito o fortemente implicito.
 must_avoid: cumulativo. "no oud" + ["cuoio"] già presenti → ["cuoio","oud"].
+tester_requested: true se l'utente menziona "tester", "campione aperto", "confezione aperta", "sample" o simili.
 escalate: true per reso/rimborso/ordine/B2B/frustrazione forte.
 missing_critical_fields: ["budget_max"] se categories=["profumo"] e budget_max mancante.
   Aggiungi "gender_lean" se categories=["profumo"] e gender_lean mancante.
@@ -111,6 +130,7 @@ NON generare testo per il cliente.
 def extract_intent(
     message: str,
     user_profile: UserProfile | None = None,
+    topic_history: list[dict] | None = None,
 ) -> Intent:
     """Extract a fresh Intent from a first-turn or new_topic message."""
     system = _EXTRACT_SYSTEM
@@ -118,6 +138,9 @@ def extract_intent(
         summary = redact_for_prompt(user_profile)
         if summary:
             system += f"\n\nProfilo utente noto (usa come prior se il messaggio non specifica):\n{summary}"
+    if topic_history:
+        history_str = _format_history(topic_history)
+        system += f"\n\nConversazione recente (dall'inizio di questa ricerca):\n{history_str}"
 
     client = OpenAI(api_key=require_openai_key())
     response = client.beta.chat.completions.parse(
@@ -150,9 +173,15 @@ def refine_intent(
     previous_intent: Intent,
     last_shown: list[NormalizedProduct] | None = None,
     user_profile: UserProfile | None = None,
+    topic_history: list[dict] | None = None,
 ) -> Intent:
     """Update an existing Intent with new information from a refinement message."""
     context_parts = [f"Intent corrente:\n{previous_intent.model_dump_json(indent=2)}"]
+
+    if topic_history:
+        history_str = _format_history(topic_history)
+        if history_str:
+            context_parts.append(f"Conversazione recente:\n{history_str}")
 
     if last_shown:
         lines = "\n".join(

@@ -94,10 +94,11 @@ Il tuo compito è decidere quale azione eseguire. NON generi testo per il client
   • L'utente ha risposto a una clarify ma non ha dato info utili
 
 "selection"
-  L'utente ha scelto uno dei prodotti mostrati nell'ultimo turno.
-  Fornisce dettagli sul prodotto scelto e salva le preferenze dell'utente.
-  Esempi: "il secondo", "quello floreale", "Chanel", "prendo il primo"
+  L'utente vuole DETTAGLI su uno specifico prodotto mostrato.
+  Esempi puri: "il secondo", "quello floreale", "dimmi di più sul primo", "Chanel", "prendo il primo"
   Popola selected_product_id con il product_id corretto dall'elenco mostrato.
+  ATTENZIONE: se il messaggio contiene "simile", "simili", "come questo", "qualcosa di simile"
+  o altri segnali di "trovami altri prodotti dello stesso tipo" → usa "refine_intent", NON "selection".
 
 "new_topic"
   L'utente inizia una ricerca NUOVA e INDIPENDENTE.
@@ -165,18 +166,31 @@ _FEW_SHOT: list[dict] = [
         "role": "assistant",
         "content": '{"action":"refine_intent","selected_product_id":null,"reasoning":"Stessa ricerca, nuovo vincolo di prezzo."}',
     },
-    # After answer, user selects
+    # After answer, user wants details on a specific product (pure selection)
     {
         "role": "user",
         "content": (
             "STATO: intent={categories:[profumo], budget_max:80}, "
             "clarify_count=0, last_shown=[p_010 Atyab Violet, p_031 Cabotine Rose, p_073 Patchouli Premier].\n"
-            "MESSAGGIO: il secondo, dammi qualcosa di simile"
+            "MESSAGGIO: dimmi di più sul secondo"
         ),
     },
     {
         "role": "assistant",
-        "content": '{"action":"selection","selected_product_id":"p_031","reasoning":"Seleziona il secondo prodotto mostrato (Cabotine Rose)."}',
+        "content": '{"action":"selection","selected_product_id":"p_031","reasoning":"L\'utente vuole solo dettagli sul secondo prodotto (Cabotine Rose), nessun segnale di similarità."}',
+    },
+    # After answer, user selects AND wants similar products → refine_intent
+    {
+        "role": "user",
+        "content": (
+            "STATO: intent={categories:[profumo], budget_max:80}, "
+            "clarify_count=0, last_shown=[p_010 Atyab Violet, p_031 Cabotine Rose, p_073 Patchouli Premier].\n"
+            "MESSAGGIO: il secondo, voglio qualcosa di simile"
+        ),
+    },
+    {
+        "role": "assistant",
+        "content": '{"action":"refine_intent","selected_product_id":null,"reasoning":"L\'utente indica il secondo prodotto come ancora stilistica e chiede altri simili — refine_intent aggiornerà l\'intent con quelle caratteristiche."}',
     },
     # New topic — same category, self-contained
     {
@@ -228,6 +242,7 @@ def route(
     last_shown: list[NormalizedProduct] | None,
     clarify_count: int,
     last_action: str | None,
+    topic_history: list[dict] | None = None,
 ) -> RouterDecision:
     """Decide the next action. The graph enforces hard constraints on top of this."""
     # Build state summary for the LLM
@@ -257,7 +272,21 @@ def route(
         state_parts.append("last_shown=nessuno")
 
     state_summary = ", ".join(state_parts)
-    user_content = f"STATO: {state_summary}.\nMESSAGGIO: {message}"
+
+    # Prepend recent conversation so the router can resolve references like
+    # "il secondo" or "quello floreale" against the actual LLM replies shown.
+    history_prefix = ""
+    if topic_history and len(topic_history) > 1:
+        prior = topic_history[:-1]  # exclude current message (already in MESSAGGIO)
+        recent = prior[-6:]         # last 3 exchanges
+        lines = []
+        for msg in recent:
+            role = "Cliente" if msg["role"] == "user" else "Lumé"
+            lines.append(f"{role}: {msg['content'][:200]}")
+        if lines:
+            history_prefix = "CONVERSAZIONE RECENTE:\n" + "\n".join(lines) + "\n\n"
+
+    user_content = f"{history_prefix}STATO: {state_summary}.\nMESSAGGIO: {message}"
 
     client = OpenAI(api_key=require_openai_key())
     messages: list[dict] = [{"role": "system", "content": _SYSTEM}]

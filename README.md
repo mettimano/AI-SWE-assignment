@@ -1,97 +1,168 @@
-# TextYess — AI Engineer Take-Home
+# Lumé
 
-Thanks for taking the time. This is designed to look like the actual work you'd do at TextYess, just weekend-sized.
+A multi-agent WhatsApp-style recommender for **Lumé**, a fictional Italian beauty reseller with ~300 products. Built as a take-home assignment for TextYess — see [ASSIGNMENT.md](ASSIGNMENT.md) for the original brief.
 
-**Deadline**: 3 calendar days from when we sent this  
-**Deliverables**: Git repo + `DESIGN.md` + `EVAL.md` + Loom (≤5 min)
-
----
-
-## The problem
-
-**Lumé** is a fictional multi-brand Italian beauty reseller. Customers message on WhatsApp with things like:
-
-- *"cerco un profumo caldo per l'inverno, qualcosa di speziato o con oud"*
-- *"un regalo per mia madre, le piace l'odore dei fiori, budget 50€"*
-- *"avete dei tester di profumi da donna a meno di 50 euro?"*
-- *"qualcosa di più luxury?"* (follow-up)
-
-**Your job**: build a system that understands what the customer needs — including implicit needs — and recommends the right products. The recommendation should feel like it came from a knowledgeable *profumiere*.
+For the architectural decisions and tradeoffs, read [DESIGN.md](DESIGN.md). For how I'd measure the system in production, [EVAL.md](EVAL.md).
 
 ---
 
-## What we give you
+## Quickstart
 
-| File | What it is |
+**Requirements:** Python 3.11+, an OpenAI API key, and [uv](https://docs.astral.sh/uv/) (recommended) or `pip`.
+
+```bash
+# 1. Clone and enter
+git clone <repo> && cd AI-SWE-assignment
+
+# 2. Set up the environment
+uv sync                              # or: pip install -e .
+
+# 3. Configure the API key
+cp .env.example .env
+# Edit .env and put your OPENAI_API_KEY
+
+# 4. Build the catalog indices (one-time, ~30s)
+python -m lume.cli --build-index
+
+# 5. Try it
+python -m lume.cli --repl
+```
+
+---
+
+## Usage
+
+### Interactive chat (REPL)
+
+```bash
+python -m lume.cli --repl
+```
+
+Clean WhatsApp-like output by default — only the message and who's sending it. Type your query, hit enter. Commands during the chat:
+
+| Command | What it does |
 |---|---|
-| `catalog.json` | ~300 anonymized products from a real Italian beauty reseller: fragrances, skincare, ancillaries. Price, variants, stock, collections. Descriptions in Italian. |
-| `brand.md` | Brand voice and business rules. |
+| `/quit` | Exit |
+| `/reset` | Clear conversation state, keep user profile |
+| `/verbose` | Toggle verbose display (mode badge, recommendation table, probe products) |
+| `/debug` | Toggle debug info (intent fields, latency) |
 
-`starter/` has a minimal `pyproject.toml` + `.env.example`. Use it or ignore it.
+### Persistent user (memory)
 
----
+Add `--user <id>` to attach the conversation to a per-user profile saved at `data/users/<id>.json`. Preferences (families liked, brands avoided, budget band) and accepted/rejected recommendations are learned and reused next session.
 
-## What you build
+```bash
+python -m lume.cli --repl --user giulia
+```
 
-**1. Agent-based recommendation system.** Decompose into specialized agents (intent extractor, retriever, ranker, explainer — your call). Takes a customer message + optional prior turns, returns recommended products with reasons and a response text. Exact output shape is up to you — defend it in `DESIGN.md`.
+A seed profile for `giulia` is included to demo the returning-customer flow.
 
-**2. Retrieval / RAG layer.** Your call on chunking, embeddings, hybrid vs. pure vector, re-ranking. Tell us why.
+### One-shot query
 
-**3. Evaluation plan (`EVAL.md`, ~1 page).** You don't need to implement the eval — we want to see how you'd *design* one. Cover:
-- **Metrics**: what would you measure and why (at least 2)? How would each be computed (deterministic check, LLM judge, human, hybrid)?
-- **Test cases**: 10+ example queries you'd include, split across happy paths and hard cases (implicit intent, gifting, budget/stock, ambiguity, negation). For each, the kind of "gold" signal you'd use.
-- **What good looks like** per metric — thresholds, calibration, failure-mode analysis plan.
-- **Cost + trust**: roughly what would it cost to run, and how would you know the eval itself is trustworthy (e.g. LLM-judge calibration against human)?
+```bash
+python -m lume.cli "vorrei un regalo per mia madre, le piacciono i fiori, budget 80€"
+```
 
-**Don't skip this. We care more about how you'd measure than about what you'd build.**
+### Verbose mode
 
-**4. `DESIGN.md`** (~2 pages): architecture and why, RAG tradeoffs, cost per query, known failure modes, how this scales to 100 merchants with 5k–50k products each. Plus a short **"Fine-tuning thought"** paragraph: *if you could fine-tune one model for this project, which model, on what data, for what objective, and why?* No need to actually do it — just one paragraph of thinking.
+Shows the mode badge, full recommendation table with prices and stock, probe products, guard warnings:
 
-**5. Loom (≤5 min)**: architecture walkthrough, demo on 2–3 queries (include at least one hard one), one tradeoff you agonized over.
-
----
-
-## Rules
-
-- Python 3.11+, any LLM provider, any framework.
-- **AI coding assistants are mandatory.** We use them every day and expect you to as well. Use them with judgment — we want to see your reasoning in commits and `DESIGN.md`, not just a clean repo.
-- Don't over-build. A small, well-measured system beats a sprawling half-built one.
-- Report cost honestly.
+```bash
+python -m lume.cli --repl --verbose
+python -m lume.cli --repl --verbose --debug    # also intent + latency
+```
 
 ---
 
-## Stretch (skip if tight on time)
+## Example interactions
 
-- **"No good match" path** — what does the system do when the catalog can't help?
-- **Multi-turn refinement** — "cheaper", "something warmer" threading correctly
-- **Adversarial eval set** — failure modes you found + mitigations
-- **Implicit memory** — prior purchases mentioned earlier in the conversation
+**Confident answer:**
+```
+Tu: vorrei un regalo per mia madre, le piacciono i fiori, budget 80€
+Lumé: Per tua madre ti mando tre opzioni floreali sotto i 50€. Il
+      Cabotine Rose (€32) è una rosa fresca e biancospino — classico,
+      mai fuori posto. ...
+```
+
+**Clarification (missing budget + gender):**
+```
+Tu: voglio un profumo
+Lumé: Hai un budget in mente, e lo cerchi per uomo o donna?
+```
+
+**Probe (vague but with hard filters known):**
+```
+Tu: qualcosa di buono per me, budget 80€, da donna
+Lumé: Per capire il tuo stile ti mando tre opzioni molto diverse: uno
+      floreale e morbido, uno agrumato e fresco, uno legnoso. Qual è
+      il registro che senti più tuo?
+```
+
+**Multi-turn refinement:**
+```
+Tu: vorrei un profumo legnoso da uomo, budget 100€
+Lumé: [tre proposte legnose under 100€]
+Tu: il secondo, qualcosa di simile
+Lumé: [altre tre proposte simili al prodotto scelto]
+```
+
+**Escalation:**
+```
+Tu: voglio restituire un ordine
+Lumé: Mi dispiace, ti passo subito a un operatore che ti
+      ricontatterà al più presto.
+```
 
 ---
 
-## How we grade
+## Project layout
 
-- **Agent system design** — is the decomposition clear? does each agent do one thing well? is the routing defensible?
-- **Intent understanding** — implicit needs handled, constraints respected, ambiguity dealt with gracefully
-- **Retrieval + ranking** — right products in the top 3 on most queries; hard cases attempted honestly
-- **Evaluation design** — metrics that would actually measure something meaningful; test cases covering real hard scenarios; honest about how you'd know the eval works
-- **Communication** — `DESIGN.md` is scannable with real tradeoffs; Loom is crisp; code is legible
-
-We don't grade on UI, CI/CD, infra, model choice, or framework vs. raw SDK.
+```
+lume/
+├── agents/           # LangGraph nodes: intent, router, clarify, responder, guard
+├── catalog/          # JSON loading, HTML cleanup, normalization
+├── retrieval/        # BM25 + Chroma vector + RRF + LLM rerank
+├── memory/           # Per-user profile JSON store
+├── cli.py            # Typer CLI / REPL
+├── config.py         # Models, thresholds, paths
+└── schemas.py        # Public Reply / Recommendation / ProbeProduct / ClarifyingQuestion
+data/
+├── catalog.json      # 300 anonymized products (given)
+├── brand.md          # Brand voice rules (given)
+└── users/            # Per-user memory files
+eval/
+├── cases.yaml        # 18 test cases (single + multi-turn + clarify + memory)
+├── deterministic.py  # Mode / budget / stock / language / no-markdown checks
+├── judge.py          # 3-axis LLM judge (relevance, brand_voice, whatsapp_feel)
+└── run.py            # Eval harness
+```
 
 ---
 
-## Deliverables
+## Evaluation
 
-1. **Git repo** (public or private-invite to `@valdo99` and `@luisbeqja`)
-2. **Loom URL** (unlisted is fine)
+```bash
+python -m eval.run                   # deterministic checks only (~30s)
+python -m eval.run --judge           # + 3-axis LLM judge (~5min, ~$0.10)
+python -m eval.run --case C03 C15    # only specific cases
+```
 
-`DESIGN.md` and `EVAL.md` at the root.
+Reports drop into `eval/runs/report_<timestamp>.{json,md}`.
+
+Baseline on the 18 included cases: 100% deterministic checks passing, judge means 3.95 / 3.95 / 4.0 on relevance / brand_voice / whatsapp_feel.
+
+See [EVAL.md](EVAL.md) for the full eval philosophy and what I'd add for production.
+
+
 
 ---
 
-## Questions
+## Troubleshooting
 
-Email `luisb@textyess.com`, cc `edvaldo@textyess.com`. We'd rather spend 5 minutes clarifying than have you guess wrong.
+**"OPENAI_API_KEY is not set"** — copy `.env.example` to `.env` and fill it in.
 
-Good luck — we're excited to see how you think.
+**Slow first query** — Chroma builds its index on first run (~30s). Subsequent runs are warm.
+
+**`--build-index` fails on the BeautifulSoup parser** — install the optional `lxml` parser: `uv pip install lxml` (or `pip install lxml`).
+
+**Want to wipe a user's memory** — `rm data/users/<id>.json`.
